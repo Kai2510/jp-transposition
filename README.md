@@ -22,6 +22,8 @@ python jp-transpos.py --<源调>-to-<目标调> --up|--down 输入文件
 | `--to KEY` | ✓ | 目标调名 |
 | `--up` 或 `--down` | 二选一 | 目标的 tonic 放在源 tonic 的上方还是下方八度 |
 | `--enharmonic MODE` | ✗ | 等音简化策略，默认 `auto`（见下表） |
+| `--key-mode MODE` | ✗ | 调号处理策略，默认 `interval`（见下表） |
+| `--chord-octaves MODE` | ✗ | 和弦八度标记位置策略，默认 `normalize`（见下表） |
 | `-o FILE` | ✗ | 输出文件，默认 `输入_transposed.扩展名` |
 
 ### 调名写法
@@ -46,6 +48,20 @@ python jp-transpos.py --<源调>-to-<目标调> --up|--down 输入文件
 被自动合并的只有四类必然等音：`#7→1'`、`b1→7,`、`#3→4`、`b4→3`。  
 而 `#1` 与 `b2` 这种真·歧义音不合并，由 `prefer_sharp` 选表决定。
 
+### `--key-mode` 模式
+
+| 模式 | 说明 |
+|------|------|
+| `interval`（默认） | 恒距离转调：调号之间的相对距离保持不变。如 G→bE→G 转到 C 变成 C→bA→C |
+| `uniform` | 全文转到同一个调：所有 `1=X` 全部替换为 `1=<目标调>`。适合把一首有转调的曲子统一到目标调记谱 |
+
+### `--chord-octaves` 模式
+
+| 模式 | 说明 |
+|------|------|
+| `normalize`（默认） | 和弦内尾部八度标记移到所属数字前（OctavesBefore 风格）。`,,62,` → `,,6,2` |
+| `preserve` | 保留原始位置不动。`,,62,///` 原样输出结构的 `,36,///`，尾部 `,` 不挪动 |
+
 ### 示例
 
 ```sh
@@ -57,6 +73,12 @@ python jp-transpos.py --bes-to-cis --up piece.tex --enharmonic none
 
 # 强制全用降号记谱
 python jp-transpos.py --from G --to C --down piece.tex --enharmonic flat
+
+# 全文所有调号统一转到 C 调（忽略原曲的转调关系）
+python jp-transpos.py --from G --to C --down piece.tex --key-mode uniform
+
+# 保留和弦内八度标记原始位置不归一化
+python jp-transpos.py --from G --to C --down piece.tex --chord-octaves preserve
 ```
 
 ---
@@ -180,6 +202,6 @@ def compute_delta(source, target, up):
 ### 六、注意事项
 
 - **空格不保留**：原始双空格等会被压缩为单空格（不影响 jianpu-ly 解析）
-- **八度标记位置**：输出统一为 `OctavesBefore` 风格（八度标记在数字前），如 `2,,` 会变成 `,,2`，已设 `OctavesBefore` 的文件语义不变
+- **八度标记位置**：默认输出会挪动和弦内尾部八度标记（OctavesBefore 风格），如 `2,,` → `,,2`。如需保留原始位置，加 `--chord-octaves preserve`
 - **不在 LP block 里改东西**：LP:  … :LP 之间的内容视为 Lilypond 裸代码，完全不碰
 - **调号格式保持**：原文件用 `bE` 则输出 `bX`，用 `Eb` 则输出 `Xb`
