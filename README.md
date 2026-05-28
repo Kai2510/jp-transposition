@@ -96,15 +96,15 @@ Let the source and target key tonics be $K_1$ and $K_2$ (in semitones above C: C
 
 Preserving sounding pitch means:
 
-$$K_1 + \text{DEG2SEMI}[d_1] + \text{ACC2SEMI}[a_1] + 12 \cdot o_1 = K_2 + \text{DEG2SEMI}[d_2] + \text{ACC2SEMI}[a_2] + 12 \cdot o_2$$
+$\displaystyle K_1 + \mathrm{DEG2SEMI}[d_1] + \mathrm{ACC2SEMI}[a_1] + 12 \cdot o_1 = K_2 + \mathrm{DEG2SEMI}[d_2] + \mathrm{ACC2SEMI}[a_2] + 12 \cdot o_2$
 
 Rearranging:
 
-$$\Delta = K_1 - K_2$$
+$\displaystyle \Delta = K_1 - K_2$
 
-$$\text{new\_value} = \Delta + \text{DEG2SEMI}[d_1] + \text{ACC2SEMI}[a_1] + 12 \cdot o_1$$
+$\displaystyle \text{new\_value} = \Delta + \mathrm{DEG2SEMI}[d_1] + \mathrm{ACC2SEMI}[a_1] + 12 \cdot o_1$
 
-$$o_2 = \text{new\_value} \;//\; 12 \qquad p = \text{new\_value} \bmod 12$$
+$\displaystyle o_2 = \text{new\_value} \;//\; 12 \qquad p = \text{new\_value} \bmod 12$
 
 Then we look up $p \mapsto (d_2, a_2)$ in one of two tables:
 
