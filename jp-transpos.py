@@ -84,6 +84,16 @@ def parse_key(name):
     sys.stderr.write("Valid: C D E F G A B, bB #C bE etc., bes cis es etc.\n")
     sys.exit(1)
 
+
+def _key_name_is_flat(name):
+    if name.lower().startswith('b') and len(name) > 1:
+        return True
+    if name.lower() in ('es', 'des', 'ges', 'bes', 'as', 'ees', 'aes'):
+        return True
+    if name.lower() in ('f',) and len(name) == 1:
+        return True
+    return False
+
 def compute_delta(source_semi, target_semi, direction_up):
     raw = source_semi - target_semi
     if direction_up:
@@ -138,17 +148,12 @@ def normalize_octaves(s, normalize_chords=True):
     core = s[:last_digit_pos + 1]
     suffix = s[last_digit_pos + 1:]
 
-    oct_after = ''
-    for c in suffix:
-        if c in "',":
-            oct_after += c
-        else:
-            break
-    suffix = suffix[len(oct_after):]
-    core = core + oct_after
+    pitch_after = ''.join(c for c in suffix if c in "',#b")
+    suffix = ''.join(c for c in suffix if c not in "',#b")
+    core = core + pitch_after
 
     def gof(s):
-        m = re.match(r"^(.*)([1-7])([',]+)$", s)
+        m = re.match(r"^(.*)([1-7])([',#b]+)$", s)
         if m:
             return gof(m.group(1)) + m.group(3) + m.group(2)
         return s
@@ -222,7 +227,7 @@ def transpose_token(token, delta, prefer_sharp, do_simplify, normalize_chords):
 # Key signature line transposition
 # ============================================================
 
-def transpose_key_in_line(line, key_interval, prefer_sharp):
+def transpose_key_in_line(line, key_interval, prefer_sharp_keys):
     def replace_key(m):
         prefix = m.group(1) + '='
         key_name = m.group(2)
@@ -230,7 +235,7 @@ def transpose_key_in_line(line, key_interval, prefer_sharp):
         letter_after = bool(re.match(r'^[A-Ga-g][#b]$', key_name))
         semi = parse_key(key_name)
         new_semi = (semi + key_interval) % 12
-        if prefer_sharp:
+        if prefer_sharp_keys:
             new_name = SEMI_TO_KEY_SHARP[new_semi]
         else:
             new_name = SEMI_TO_KEY_FLAT[new_semi]
@@ -257,7 +262,7 @@ SKIP_WORDS = {
 }
 
 def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
-                    normalize_chords, key_mode, target_key_name, target_key_pfx):
+                    normalize_chords, key_mode, target_key_name, prefer_sharp_keys):
     """Process entire file content.
 
     key_mode: 'interval' (preserve key-change distances) or 'uniform' (all to target)
@@ -267,6 +272,7 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
     lines = content.split('\n')
     result = []
     in_lp_block = False
+    octaves_before_added = False
 
     for line in lines:
         stripped = line.strip()
@@ -287,13 +293,23 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
             result.append(line)
             continue
 
+        if not octaves_before_added and not in_lp_block:
+            if stripped in ('OctavesBefore', 'OctavesAfter'):
+                octaves_before_added = True
+            elif re.match(r'^[16]=', stripped) or \
+                 (not stripped.startswith('L:') and not stripped.startswith('H:')
+                  and not re.match(r'^[A-Za-z]+\s*=', stripped)
+                  and stripped not in SKIP_WORDS):
+                result.append('OctavesBefore')
+                octaves_before_added = True
+
         if re.match(r'^[16]=[#b]?[A-Ga-g][#b]?$', stripped) or \
            re.match(r'^[16]=[A-Ga-g][#b]?$', stripped):
             if key_mode == 'uniform':
                 pfx = stripped.split('=')[0] + '='
                 result.append(pfx + target_key_name)
             else:
-                result.append(transpose_key_in_line(stripped, key_interval, prefer_sharp))
+                result.append(transpose_key_in_line(stripped, key_interval, prefer_sharp_keys))
             continue
 
         if re.match(r'^[A-Za-z]+\s*=', stripped):
@@ -304,6 +320,8 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
             continue
         if stripped in SKIP_WORDS:
             result.append(line)
+            if stripped in ('NextPart', 'NextScore'):
+                result.append('OctavesBefore')
             continue
         if re.match(r'^[1-9][0-9]*=[1-9][0-9]*$', stripped):
             result.append(line)
@@ -320,7 +338,7 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
                     pfx = token.split('=')[0] + '='
                     new_tokens.append(pfx + target_key_name)
                 else:
-                    new_tokens.append(transpose_key_in_line(token, key_interval, prefer_sharp))
+                    new_tokens.append(transpose_key_in_line(token, key_interval, prefer_sharp_keys))
                 continue
 
             grace_m = re.match(r'^g\[([#b\',1-7qsdh]+)\]$', token)
@@ -427,7 +445,14 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
     delta = compute_delta(source_semi, target_semi, args.up)
     key_interval = (target_semi - source_semi) % 12
 
-    if prefer_sharp:
+    if enharmonic == 'sharp':
+        prefer_sharp_keys = True
+    elif enharmonic == 'flat':
+        prefer_sharp_keys = False
+    else:
+        prefer_sharp_keys = not _key_name_is_flat(args.target)
+
+    if prefer_sharp_keys:
         target_key_name = SEMI_TO_KEY_SHARP[target_semi]
     else:
         target_key_name = SEMI_TO_KEY_FLAT[target_semi]
@@ -440,7 +465,7 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
         sys.exit(1)
 
     result = process_content(content, delta, key_interval, prefer_sharp, do_simplify,
-                             normalize_chords, key_mode, target_key_name, None)
+                             normalize_chords, key_mode, target_key_name, prefer_sharp_keys)
 
     output = args.output
     if not output:
