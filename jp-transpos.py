@@ -122,7 +122,11 @@ def transpose_single_note(digit, acc, oct_level, delta, prefer_sharp, do_simplif
 # Token normalization and transposition
 # ============================================================
 
-def normalize_octaves(s):
+def normalize_octaves(s, normalize_chords=True):
+    digit_count = sum(1 for c in s if c in '1234567')
+    if not normalize_chords and digit_count > 1:
+        return s
+
     last_digit_pos = -1
     for i in range(len(s) - 1, -1, -1):
         if s[i] in '1234567':
@@ -152,7 +156,7 @@ def normalize_octaves(s):
     core = gof(core)
     return core + suffix
 
-def transpose_token(token, delta, prefer_sharp, do_simplify):
+def transpose_token(token, delta, prefer_sharp, do_simplify, normalize_chords):
     tremolo = ''
     if '///' in token:
         tremolo = '///'
@@ -170,7 +174,7 @@ def transpose_token(token, delta, prefer_sharp, do_simplify):
     if not token:
         return base_oct + tremolo
 
-    token = normalize_octaves(token)
+    token = normalize_octaves(token, normalize_chords)
 
     result = []
     current_octave = ''
@@ -252,7 +256,14 @@ SKIP_WORDS = {
     'Harm:', ':Harm',
 }
 
-def process_content(content, delta, key_interval, prefer_sharp, do_simplify):
+def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
+                    normalize_chords, key_mode, target_key_name, target_key_pfx):
+    """Process entire file content.
+
+    key_mode: 'interval' (preserve key-change distances) or 'uniform' (all to target)
+    target_key_name: e.g. 'C' - the target key name as user typed it
+    target_key_pfx: e.g. '1=' - keep the prefix from the first key change
+    """
     lines = content.split('\n')
     result = []
     in_lp_block = False
@@ -278,7 +289,11 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify):
 
         if re.match(r'^[16]=[#b]?[A-Ga-g][#b]?$', stripped) or \
            re.match(r'^[16]=[A-Ga-g][#b]?$', stripped):
-            result.append(transpose_key_in_line(stripped, key_interval, prefer_sharp))
+            if key_mode == 'uniform':
+                pfx = stripped.split('=')[0] + '='
+                result.append(pfx + target_key_name)
+            else:
+                result.append(transpose_key_in_line(stripped, key_interval, prefer_sharp))
             continue
 
         if re.match(r'^[A-Za-z]+\s*=', stripped):
@@ -301,24 +316,28 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify):
         for token in stripped.split():
             if re.match(r'^[16]=[#b]?[A-Ga-g][#b]?$', token) or \
                re.match(r'^[16]=[A-Ga-g][#b]?$', token):
-                new_tokens.append(transpose_key_in_line(token, key_interval, prefer_sharp))
+                if key_mode == 'uniform':
+                    pfx = token.split('=')[0] + '='
+                    new_tokens.append(pfx + target_key_name)
+                else:
+                    new_tokens.append(transpose_key_in_line(token, key_interval, prefer_sharp))
                 continue
 
             grace_m = re.match(r'^g\[([#b\',1-7qsdh]+)\]$', token)
             if grace_m:
                 inner = grace_m.group(1)
-                new_inner = transpose_token(inner, delta, prefer_sharp, do_simplify)
+                new_inner = transpose_token(inner, delta, prefer_sharp, do_simplify, normalize_chords)
                 new_tokens.append('g[' + new_inner + ']')
                 continue
 
             grace_a = re.match(r'^\[([#b\',1-7,q,s,d,h]+)\]g$', token)
             if grace_a:
                 inner = grace_a.group(1)
-                new_inner = transpose_token(inner, delta, prefer_sharp, do_simplify)
+                new_inner = transpose_token(inner, delta, prefer_sharp, do_simplify, normalize_chords)
                 new_tokens.append('[' + new_inner + ']g')
                 continue
 
-            new_tokens.append(transpose_token(token, delta, prefer_sharp, do_simplify))
+            new_tokens.append(transpose_token(token, delta, prefer_sharp, do_simplify, normalize_chords))
 
         result.append(' '.join(new_tokens))
 
@@ -352,6 +371,8 @@ Examples:
   %(prog)s --bes-to-cis --up input.tex output.tex
   %(prog)s --from G --to C --down input.tex --enharmonic none
   %(prog)s --from G --to C --down input.tex --enharmonic sharp
+  %(prog)s --from G --to C --down input.tex --key-mode uniform
+  %(prog)s --from G --to C --down input.tex --chord-octaves preserve
 
 Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
         """)
@@ -370,6 +391,14 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
                              'none (keep #7/b1/#3/b4 etc., prefer by direction), '
                              'sharp (force sharps), '
                              'flat (force flats) [default: auto]')
+    parser.add_argument('--key-mode', choices=('interval', 'uniform'), default='interval',
+                        help='Key signature handling: '
+                             'interval (preserve key-change distances), '
+                             'uniform (all keys become target) [default: interval]')
+    parser.add_argument('--chord-octaves', choices=('normalize', 'preserve'), default='normalize',
+                        help='Chord octave mark handling: '
+                             'normalize (move trailing marks before digits, OctavesBefore style), '
+                             'preserve (keep original positions in chords) [default: normalize]')
     parser.add_argument('-o', '--output',
                         help='Output file (default: input_transposed.ext)')
     parser.add_argument('input', help='Input jianpu-ly file')
@@ -390,10 +419,18 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
         prefer_sharp = args.up
         do_simplify = True
 
+    normalize_chords = (args.chord_octaves == 'normalize')
+    key_mode = args.key_mode
+
     source_semi = parse_key(args.source)
     target_semi = parse_key(args.target)
     delta = compute_delta(source_semi, target_semi, args.up)
     key_interval = (target_semi - source_semi) % 12
+
+    if prefer_sharp:
+        target_key_name = SEMI_TO_KEY_SHARP[target_semi]
+    else:
+        target_key_name = SEMI_TO_KEY_FLAT[target_semi]
 
     try:
         with open(args.input, 'r', encoding='utf-8') as f:
@@ -402,7 +439,8 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
         sys.stderr.write(f"Error: File not found: {args.input}\n")
         sys.exit(1)
 
-    result = process_content(content, delta, key_interval, prefer_sharp, do_simplify)
+    result = process_content(content, delta, key_interval, prefer_sharp, do_simplify,
+                             normalize_chords, key_mode, target_key_name, None)
 
     output = args.output
     if not output:
@@ -417,7 +455,8 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
     tgt_name = args.target
     sys.stderr.write(f"Transposed: {args.input} -> {output}\n")
     sys.stderr.write(f"  {src_name} -> {tgt_name} ({direction_str}), "
-                     f"delta={delta:+d} semitones, enharmonic={enharmonic}\n")
+                     f"delta={delta:+d} semitones, enharmonic={enharmonic}, "
+                     f"key-mode={key_mode}, chord-octaves={args.chord_octaves}\n")
 
 if __name__ == '__main__':
     main()
