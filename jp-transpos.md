@@ -24,6 +24,7 @@ python jp-transpos.py --<源调>-to-<目标调> --up|--down 输入文件
 | `--enharmonic MODE` | ✗ | 等音简化策略，默认 `auto`（见下表） |
 | `--key-mode MODE` | ✗ | 调号处理策略，默认 `interval`（见下表） |
 | `--chord-octaves MODE` | ✗ | 和弦八度标记位置策略，默认 `normalize`（见下表） |
+| `--lines RANGE` | ✗ | 只对指定行范围移调，如 `30-50`、`30-`、`-50` |
 | `-o FILE` | ✗ | 输出文件，默认 `输入_transposed.扩展名` |
 
 ### 调名写法
@@ -81,6 +82,9 @@ python jp-transpos.py --from G --to C --down piece.tex --key-mode uniform
 
 # 保留和弦内八度标记原始位置不归一化
 python jp-transpos.py --from G --to C --down piece.tex --chord-octaves preserve
+
+# 只移调第 30-50 行（其他行原样保留）
+python jp-transpos.py --from G --to C --down piece.tex --lines 30-50
 ```
 
 ---
@@ -95,15 +99,15 @@ jianpu 的核心约定：数字 1 永远是当前调的 tonic。
 
 音高保持不变意味着：
 
-$$K_1 + \text{DEG2SEMI}[d_1] + \text{ACC2SEMI}[a_1] + 12 \cdot o_1 = K_2 + \text{DEG2SEMI}[d_2] + \text{ACC2SEMI}[a_2] + 12 \cdot o_2$$
+$\displaystyle K_1 + \mathrm{DEG2SEMI}[d_1] + \mathrm{ACC2SEMI}[a_1] + 12 \cdot o_1 = K_2 + \mathrm{DEG2SEMI}[d_2] + \mathrm{ACC2SEMI}[a_2] + 12 \cdot o_2$
 
 整理得：
 
-$$\Delta = K_1 - K_2$$
+$\displaystyle \Delta = K_1 - K_2$
 
-$$\text{new\_value} = \Delta + \text{DEG2SEMI}[d_1] + \text{ACC2SEMI}[a_1] + 12 \cdot o_1$$
+$\displaystyle \text{new\_value} = \Delta + \mathrm{DEG2SEMI}[d_1] + \mathrm{ACC2SEMI}[a_1] + 12 \cdot o_1$
 
-$$o_2 = \text{new\_value} \;\text{//}\; 12 \qquad p = \text{new\_value} \bmod 12$$
+$\displaystyle o_2 = \text{new\_value} \;//\; 12 \qquad p = \text{new\_value} \bmod 12$
 
 然后查表 $p \mapsto (d_2, a_2)$：
 

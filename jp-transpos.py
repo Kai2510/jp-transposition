@@ -5,9 +5,9 @@ r"""
 jp-transpos.py - Transpose jianpu-ly input files (pitch-preserving re-notation)
 
 Usage:
-    python jp-transpos.py --from bE --to C --down input.tex [-o output.tex]
-    python jp-transpos.py --bes-to-cis --up input.tex [output.tex]
-    python jp-transpos.py --from G --to C --up input.tex --simplify flat
+    python jp-transpos.py --from bE --to C --down input -o output
+    python jp-transpos.py --bes-to-cis --up input output
+    python jp-transpos.py --from G --to C --up input --simplify flat
 
 The --up/--down flag controls which octave the target key tonic is in
 relative to the source key tonic:
@@ -30,8 +30,8 @@ import os
 KEY_TO_SEMI = {}
 _raw_keys = {
     'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11,
-    'cis': 1, 'des': 1, 'dis': 3, 'es': 3, 'fis': 6, 'ges': 6,
-    'gis': 8, 'as': 8, 'ais': 10, 'bes': 10,
+    'cis': 1, 'des': 1, 'dis': 3, 'es': 3, 'ees': 3, 'fis': 6, 'ges': 6,
+    'gis': 8, 'as': 8, 'aes': 8, 'ais': 10, 'bes': 10,
 }
 for _k, _v in _raw_keys.items():
     KEY_TO_SEMI[_k] = _v
@@ -66,12 +66,15 @@ SEMI_TO_KEY_FLAT = {
     6:'bG', 7:'G', 8:'bA', 9:'A', 10:'bB', 11:'B'
 }
 
-NOTE_RE = (
+# copied from note_regex in jianpu-ly.py
+note_regex = (
     r"(?:[.,'cqsdh#b]"
     r"[.,'cqsdh\\#b]*)?"
     r"[0-9x-]"
     r"[0-9x.,'cqsdh\\#b-]*"
 )
+
+KEY_SIG_RE = r'[16]=[#b]?[A-Ga-g][#b]?$'
 
 # ============================================================
 # Key parsing
@@ -86,13 +89,7 @@ def parse_key(name):
 
 
 def _key_name_is_flat(name):
-    if name.lower().startswith('b') and len(name) > 1:
-        return True
-    if name.lower() in ('es', 'des', 'ges', 'bes', 'as', 'ees', 'aes'):
-        return True
-    if name.lower() in ('f',) and len(name) == 1:
-        return True
-    return False
+    return name.lower() in ('f', 'bes', 'ees', 'aes', 'des', 'ges')
 
 def compute_delta(source_semi, target_semi, direction_up):
     raw = source_semi - target_semi
@@ -133,13 +130,13 @@ def transpose_single_note(digit, acc, oct_level, delta, prefer_sharp, do_simplif
 # ============================================================
 
 def normalize_octaves(s, normalize_chords=True):
-    digit_count = sum(1 for c in s if c in '1234567')
+    digit_count = sum(1 for c in s if c in '123456789')
     if not normalize_chords and digit_count > 1:
         return s
 
     last_digit_pos = -1
     for i in range(len(s) - 1, -1, -1):
-        if s[i] in '1234567':
+        if s[i] in '123456789':
             last_digit_pos = i
             break
     if last_digit_pos == -1:
@@ -153,7 +150,7 @@ def normalize_octaves(s, normalize_chords=True):
     core = core + pitch_after
 
     def gof(s):
-        m = re.match(r"^(.*)([1-7])([',#b]+)$", s)
+        m = re.match(r"^(.*)([1-9])([',#b]+)$", s)
         if m:
             return gof(m.group(1)) + m.group(3) + m.group(2)
         return s
@@ -167,19 +164,18 @@ def transpose_token(token, delta, prefer_sharp, do_simplify, normalize_chords):
         tremolo = '///'
         token = token.replace('///', '', 1)
 
-    if not re.match(NOTE_RE + '$', token):
+    if not re.match(note_regex + '$', token):
         return token + tremolo
-    if not re.search('[1-7]', token):
+    if not re.search('[1-9]', token):
         return token + tremolo
 
-    token = token.replace('8', "1'").replace('9', "2'")
-
-    base_oct = ''.join(c for c in token if c in '<>')
+    base_oct_change = ''.join(c for c in token if c in '<>')
     token = ''.join(c for c in token if c not in '<>')
     if not token:
-        return base_oct + tremolo
+        return base_oct_change + tremolo
 
     token = normalize_octaves(token, normalize_chords)
+    token = token.replace('8', "1'").replace('9', "2'")
 
     result = []
     current_octave = ''
@@ -221,60 +217,70 @@ def transpose_token(token, delta, prefer_sharp, do_simplify, normalize_chords):
     if current_octave or current_acc:
         result.append(current_octave + current_acc)
 
-    return base_oct + ''.join(result) + tremolo
+    return base_oct_change + ''.join(result) + tremolo
 
 # ============================================================
-# Key signature line transposition
+# Key signature transposition
 # ============================================================
 
-def transpose_key_in_line(line, key_interval, prefer_sharp_keys):
-    def replace_key(m):
-        prefix = m.group(1) + '='
-        key_name = m.group(2)
-        acc_before = bool(re.match(r'^[#b][A-Ga-g]$', key_name))
-        letter_after = bool(re.match(r'^[A-Ga-g][#b]$', key_name))
-        semi = parse_key(key_name)
-        new_semi = (semi + key_interval) % 12
-        if prefer_sharp_keys:
-            new_name = SEMI_TO_KEY_SHARP[new_semi]
-        else:
-            new_name = SEMI_TO_KEY_FLAT[new_semi]
-        if letter_after and len(new_name) == 2:
-            new_name = new_name[1] + new_name[0]
-        if len(key_name) == 1 and key_name.islower():
-            new_name = new_name.lower()
-        elif len(key_name) > 1 and key_name[-1].islower():
-            new_name = new_name[0] + new_name[1:].lower()
-        return prefix + new_name
-
-    return re.sub(r'([16])=([#b]?[A-Ga-g][#b]?|[A-Ga-g])\b', replace_key, line)
+def transpose_key_token(token, key_interval, prefer_sharp_keys):
+    m = re.match(r'([16])=([#b]?[A-Ga-g][#b]?)', token)
+    if not m:
+        return token
+    prefix = m.group(1) + '='
+    key_name = m.group(2)
+    acc_after = bool(re.match(r'[A-Ga-g][#b]$', key_name))
+    semi = parse_key(key_name)
+    new_semi = (semi + key_interval) % 12
+    if prefer_sharp_keys:
+        new_name = SEMI_TO_KEY_SHARP[new_semi]
+    else:
+        new_name = SEMI_TO_KEY_FLAT[new_semi]
+    if acc_after and len(new_name) == 2:
+        new_name = new_name[1] + new_name[0]
+    if len(key_name) == 1 and key_name.islower():
+        new_name = new_name.lower()
+    elif len(key_name) > 1 and key_name[-1].islower():
+        new_name = new_name[0] + new_name[1:].lower()
+    return prefix + new_name
 
 # ============================================================
 # File processing
 # ============================================================
 
-SKIP_WORDS = {
-    'NextPart', 'NextScore', 'OnePage', 'NoBarNums', 'NoIndent',
-    'RaggedLast', 'SeparateTimesig', 'WithStaff', 'PartMidi',
-    'KeepLength', 'OctavesBefore', 'OctavesAfter', 'ChordsRoman',
-    'angka', 'Indonesian', 'Fine', 'DC', 'DS', 'Segno', 'ToCoda',
-    'Harm:', ':Harm',
-}
-
 def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
-                    normalize_chords, key_mode, target_key_name, prefer_sharp_keys):
+                    normalize_chords, key_mode, target_key_name, prefer_sharp_keys,
+                    line_range=None):
     """Process entire file content.
 
     key_mode: 'interval' (preserve key-change distances) or 'uniform' (all to target)
     target_key_name: e.g. 'C' - the target key name as user typed it
-    target_key_pfx: e.g. '1=' - keep the prefix from the first key change
+    line_range: optional (first, last) 1-based inclusive, or None for whole file
     """
     lines = content.split('\n')
     result = []
     in_lp_block = False
-    octaves_before_added = False
+    line_no = 0  # 1-based
 
-    for line in lines:
+    # Only insert OctavesBefore at top if the file has none of its own.
+    # This keeps line count stable on repeated runs — existing directives
+    # are replaced in-place rather than suppressed+inserted.
+    _has_own_ob = any(l.strip() in ('OctavesBefore', 'OctavesAfter')
+                      and not l.strip().startswith(('LP:', 'LPH:', '%'))
+                      for l in lines)
+    if not _has_own_ob:
+        result.append('OctavesBefore')
+
+    _skip_next = 0  # count of lines to skip (look-ahead consumed)
+
+    for idx, line in enumerate(lines):
+        line_no += 1
+
+        if _skip_next > 0:
+            _skip_next -= 1
+            result.append('OctavesBefore')
+            continue
+
         stripped = line.strip()
 
         if stripped.startswith('LP:') or stripped.startswith('LPH:'):
@@ -293,62 +299,55 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
             result.append(line)
             continue
 
-        if not octaves_before_added and not in_lp_block:
-            if stripped in ('OctavesBefore', 'OctavesAfter'):
-                octaves_before_added = True
-            elif re.match(r'^[16]=', stripped) or \
-                 (not stripped.startswith('L:') and not stripped.startswith('H:')
-                  and not re.match(r'^[A-Za-z]+\s*=', stripped)
-                  and stripped not in SKIP_WORDS):
-                result.append('OctavesBefore')
-                octaves_before_added = True
-
-        if re.match(r'^[16]=[#b]?[A-Ga-g][#b]?$', stripped) or \
-           re.match(r'^[16]=[A-Ga-g][#b]?$', stripped):
-            if key_mode == 'uniform':
-                pfx = stripped.split('=')[0] + '='
-                result.append(pfx + target_key_name)
-            else:
-                result.append(transpose_key_in_line(stripped, key_interval, prefer_sharp_keys))
-            continue
-
-        if re.match(r'^[A-Za-z]+\s*=', stripped):
+        if re.match(r'[A-Za-z]+\s*=', stripped):
             result.append(line)
             continue
         if stripped.startswith('L:') or stripped.startswith('H:'):
             result.append(line)
             continue
-        if stripped in SKIP_WORDS:
-            result.append(line)
-            if stripped in ('NextPart', 'NextScore'):
-                result.append('OctavesBefore')
+
+        # Replace existing OctavesBefore/OctavesAfter one-for-one.
+        # If this line is right after a NextScore/NextPart, it would have
+        # been detected by the look-ahead below, so reaching here means
+        # it's an unrelated standalone directive — keep it.
+        if stripped in ('OctavesBefore', 'OctavesAfter'):
+            result.append('OctavesBefore')
             continue
-        if re.match(r'^[1-9][0-9]*=[1-9][0-9]*$', stripped):
-            result.append(line)
-            continue
-        if re.match(r'^[1-9][0-9]*/[1-468]+', stripped):
-            result.append(line)
-            continue
+
+        # ---- check line range ----
+        if line_range is not None:
+            first, last = line_range
+            if line_no < first or line_no > last:
+                result.append(line)
+                continue
+
+        # ---- token-level processing ----
+        has_next = any(t in ('NextScore', 'NextPart') for t in stripped.split())
+
+        # Peek ahead: if next line is OctavesBefore/OctavesAfter, consume it.
+        if has_next and idx + 1 < len(lines):
+            nxt = lines[idx + 1].strip()
+            if nxt in ('OctavesBefore', 'OctavesAfter'):
+                _skip_next = 1
 
         new_tokens = []
         for token in stripped.split():
-            if re.match(r'^[16]=[#b]?[A-Ga-g][#b]?$', token) or \
-               re.match(r'^[16]=[A-Ga-g][#b]?$', token):
+            if re.match(KEY_SIG_RE, token):
                 if key_mode == 'uniform':
                     pfx = token.split('=')[0] + '='
                     new_tokens.append(pfx + target_key_name)
                 else:
-                    new_tokens.append(transpose_key_in_line(token, key_interval, prefer_sharp_keys))
+                    new_tokens.append(transpose_key_token(token, key_interval, prefer_sharp_keys))
                 continue
 
-            grace_m = re.match(r'^g\[([#b\',1-7qsdh]+)\]$', token)
+            grace_m = re.match(r'g\[([#b\',1-9qsdh]+)\]$', token)
             if grace_m:
                 inner = grace_m.group(1)
                 new_inner = transpose_token(inner, delta, prefer_sharp, do_simplify, normalize_chords)
                 new_tokens.append('g[' + new_inner + ']')
                 continue
 
-            grace_a = re.match(r'^\[([#b\',1-7,q,s,d,h]+)\]g$', token)
+            grace_a = re.match(r'\[([#b\',1-9,q,s,d,h]+)\]g$', token)
             if grace_a:
                 inner = grace_a.group(1)
                 new_inner = transpose_token(inner, delta, prefer_sharp, do_simplify, normalize_chords)
@@ -357,7 +356,10 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
 
             new_tokens.append(transpose_token(token, delta, prefer_sharp, do_simplify, normalize_chords))
 
-        result.append(' '.join(new_tokens))
+        if new_tokens:
+            result.append(' '.join(new_tokens))
+            if has_next and _skip_next == 0:
+                result.append('OctavesBefore')
 
     return '\n'.join(result)
 
@@ -368,8 +370,8 @@ def process_content(content, delta, key_interval, prefer_sharp, do_simplify,
 def preprocess_args(argv):
     new_args = []
     for arg in argv:
-        m = re.match(r'^--([a-zA-Z#]+)-to-([a-zA-Z#]+)$', arg)
-        if m and arg not in ('--from', '--to'):
+        m = re.match(r'--([a-zA-Z#]+)-to-([a-zA-Z#]+)$', arg)
+        if m:
             new_args.extend(['--from', m.group(1), '--to', m.group(2)])
         else:
             new_args.append(arg)
@@ -385,12 +387,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --from bE --to C --down input.tex
-  %(prog)s --bes-to-cis --up input.tex output.tex
-  %(prog)s --from G --to C --down input.tex --enharmonic none
-  %(prog)s --from G --to C --down input.tex --enharmonic sharp
-  %(prog)s --from G --to C --down input.tex --key-mode uniform
-  %(prog)s --from G --to C --down input.tex --chord-octaves preserve
+  %(prog)s --from bE --to C --down input
+  %(prog)s --bes-to-cis --up input output
+  %(prog)s --from G --to C --down input --enharmonic none
+  %(prog)s --from G --to C --down input --enharmonic sharp
+  %(prog)s --from G --to C --down input --key-mode uniform
+  %(prog)s --from G --to C --down input --chord-octaves preserve
 
 Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
         """)
@@ -417,6 +419,8 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
                         help='Chord octave mark handling: '
                              'normalize (move trailing marks before digits, OctavesBefore style), '
                              'preserve (keep original positions in chords) [default: normalize]')
+    parser.add_argument('--lines',
+                        help='Limit transposition to a line range, e.g. "30-50", "30-", "-50"')
     parser.add_argument('-o', '--output',
                         help='Output file (default: input_transposed.ext)')
     parser.add_argument('input', help='Input jianpu-ly file')
@@ -439,6 +443,16 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
 
     normalize_chords = (args.chord_octaves == 'normalize')
     key_mode = args.key_mode
+
+    line_range = None
+    if args.lines:
+        m = re.match(r'(\d+)?-(\d+)?$', args.lines)
+        if not m:
+            sys.stderr.write("Error: --lines must be like '30-50', '30-', or '-50'\n")
+            sys.exit(1)
+        first = int(m.group(1)) if m.group(1) else 1
+        last = int(m.group(2)) if m.group(2) else 999999
+        line_range = (first, last)
 
     source_semi = parse_key(args.source)
     target_semi = parse_key(args.target)
@@ -465,7 +479,8 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
         sys.exit(1)
 
     result = process_content(content, delta, key_interval, prefer_sharp, do_simplify,
-                             normalize_chords, key_mode, target_key_name, prefer_sharp_keys)
+                             normalize_chords, key_mode, target_key_name, prefer_sharp_keys,
+                             line_range)
 
     output = args.output
     if not output:
@@ -482,6 +497,14 @@ Key names: C D E F G A B, bB #C bE bA bD, bes cis es fis gis ais des dis ges as
     sys.stderr.write(f"  {src_name} -> {tgt_name} ({direction_str}), "
                      f"delta={delta:+d} semitones, enharmonic={enharmonic}, "
                      f"key-mode={key_mode}, chord-octaves={args.chord_octaves}\n")
+
+# ---- Implementation note: OctavesBefore ----
+# We unconditionally add OctavesBefore at the very start of output and after
+# each NextScore/NextPart, because all output is rewritten to OctavesBefore
+# style.  Any OctavesBefore or OctavesAfter from the input is suppressed.
+# (Previous logic conditionally inserted OctavesBefore before the first key
+#  signature and after NextPart/NextScore, but the simpler unconditional
+#  approach is more robust across multi-part scores.)
 
 if __name__ == '__main__':
     main()
