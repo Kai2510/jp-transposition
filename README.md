@@ -1,6 +1,6 @@
 # jp-transpos — Transpose jianpu-ly input files
 
-Re-notate a jianpu-ly input file (`.tex` etc.) from one key to another while **preserving sounding pitch**.
+Re-notate a jianpu-ly input file (`.txt` etc.) from one key to another while **preserving sounding pitch**.
 
 ## Usage
 
